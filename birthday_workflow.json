@@ -1,0 +1,159 @@
+{
+  "name": "Birthday Email Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Daily Cron (9 AM)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "notes": "Runs every day at 9:00 AM. Change '9' to your preferred hour (0-23)."
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "filePath": "={{ $env.BIRTHDAY_EXCEL_PATH || '/data/birthdays.xlsx' }}",
+        "options": {
+          "range": "A1:E1000",
+          "sheetName": "Birthdays"
+        }
+      },
+      "id": "read-excel",
+      "name": "Read Excel File",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date();\nconst todayMonth = today.getMonth() + 1;\nconst todayDay = today.getDate();\n\nconst birthdays = [];\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  \n  if (!row.Name || !row.Email || !row.Birthday) continue;\n  \n  let bday;\n  const raw = String(row.Birthday).trim();\n  \n  // Support formats: YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY\n  if (raw.includes('-')) {\n    const parts = raw.split('-');\n    bday = { month: parseInt(parts[1]), day: parseInt(parts[2]) };\n  } else if (raw.includes('/')) {\n    const parts = raw.split('/');\n    // Detect DD/MM/YYYY vs MM/DD/YYYY by value range\n    if (parseInt(parts[0]) > 12) {\n      bday = { month: parseInt(parts[1]), day: parseInt(parts[0]) };\n    } else {\n      bday = { month: parseInt(parts[0]), day: parseInt(parts[1]) };\n    }\n  } else {\n    continue;\n  }\n  \n  if (bday.month === todayMonth && bday.day === todayDay) {\n    const birthYear = raw.split(/[-\\/]/)[0];\n    const age = (birthYear.length === 4) ? today.getFullYear() - parseInt(birthYear) : null;\n    \n    birthdays.push({\n      json: {\n        name: String(row.Name).trim(),\n        email: String(row.Email).trim(),\n        birthday: raw,\n        department: String(row.Department || '').trim(),\n        customMessage: String(row.Message || '').trim(),\n        age: age,\n        ageText: age ? `You're turning ${age} today! ` : ''\n      }\n    });\n  }\n}\n\nif (birthdays.length === 0) {\n  return [{ json: { noBirthdays: true, message: 'No birthdays today' } }];\n}\n\nreturn birthdays;"
+      },
+      "id": "check-birthdays",
+      "name": "Check Today's Birthdays",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "={{ $json.noBirthdays }}",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.noBirthdays }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notTrue"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "has-birthdays",
+      "name": "Has Birthdays Today?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const person = $input.item.json;\n\nconst customMsg = person.customMessage;\nconst name = person.name;\nconst dept = person.department ? ` from ${person.department}` : '';\nconst ageText = person.ageText || '';\n\nconst subject = `🎂 Happy Birthday, ${name}!`;\n\nconst html = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n<style>\n  body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }\n  .card { background: #ffffff; border-radius: 16px; max-width: 560px; margin: auto; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }\n  .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center; }\n  .header h1 { color: #fff; font-size: 28px; margin: 0; }\n  .header p { color: rgba(255,255,255,0.85); font-size: 15px; margin: 8px 0 0; }\n  .body { padding: 36px 30px; }\n  .body p { color: #444; font-size: 15px; line-height: 1.7; }\n  .highlight { font-size: 48px; text-align: center; margin: 20px 0; }\n  .footer { text-align: center; padding: 20px; background: #f9f9f9; color: #aaa; font-size: 12px; }\n</style>\n</head>\n<body>\n  <div class=\"card\">\n    <div class=\"header\">\n      <h1>🎉 Happy Birthday!</h1>\n      <p>Wishing you a wonderful day, ${name}${dept}!</p>\n    </div>\n    <div class=\"body\">\n      <div class=\"highlight\">🎂</div>\n      <p>Dear <strong>${name}</strong>,</p>\n      <p>${ageText}${customMsg || `Wishing you a day filled with joy, laughter, and all the things that make you smile. May this birthday mark the beginning of a fantastic year ahead!`}</p>\n      <p>Here's to you — enjoy every moment of your special day! 🥳</p>\n    </div>\n    <div class=\"footer\">Sent with ❤️ by Birthday Bot • ${new Date().getFullYear()}</div>\n  </div>\n</body>\n</html>`;\n\nreturn [{ json: { ...person, subject, html } }];"
+      },
+      "id": "build-email",
+      "name": "Build Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "replyTo": "={{ $env.SENDER_EMAIL || 'noreply@yourcompany.com' }}"
+        }
+      },
+      "id": "send-gmail",
+      "name": "Send Birthday Email (Gmail)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1340, 220],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date().toDateString();\nconst sent = $input.all().map(i => i.json.name).join(', ');\nconsole.log(`[${today}] Birthday emails sent to: ${sent}`);\nreturn $input.all();"
+      },
+      "id": "log-success",
+      "name": "Log Sent Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date().toDateString();\nconsole.log(`[${today}] No birthdays today — skipping.`);\nreturn [{ json: { status: 'skipped', date: today } }];"
+      },
+      "id": "log-skip",
+      "name": "Log No Birthdays",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400]
+    }
+  ],
+  "connections": {
+    "Daily Cron (9 AM)": {
+      "main": [[{ "node": "Read Excel File", "type": "main", "index": 0 }]]
+    },
+    "Read Excel File": {
+      "main": [[{ "node": "Check Today's Birthdays", "type": "main", "index": 0 }]]
+    },
+    "Check Today's Birthdays": {
+      "main": [[{ "node": "Has Birthdays Today?", "type": "main", "index": 0 }]]
+    },
+    "Has Birthdays Today?": {
+      "main": [
+        [{ "node": "Build Email Content", "type": "main", "index": 0 }],
+        [{ "node": "Log No Birthdays", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build Email Content": {
+      "main": [[{ "node": "Send Birthday Email (Gmail)", "type": "main", "index": 0 }]]
+    },
+    "Send Birthday Email (Gmail)": {
+      "main": [[{ "node": "Log Sent Emails", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": ["birthday", "automation", "email"],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
